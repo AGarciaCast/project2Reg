@@ -1,12 +1,12 @@
-install.packages("ggplot2")
-install.packages("foreach")
-install.packages("xlsx")
+#install.packages("ggplot2")
+#install.packages("foreach")
+#install.packages("openxlsx")
 
 source("multiplot.R")
 
 library(ggplot2)
 library(foreach)
-library(xlsx)
+library(openxlsx)
 
 ######################### Section 1: Read data #########################
 
@@ -14,8 +14,8 @@ library(xlsx)
 # Note that the folder in which you have Cancellation.csv must be set as the working directory
 ###### You do not need to change anything in this section. The data will be sorted in a table named glmdata
 
-glmdata <- read.table("Cancellation.csv", header=TRUE, sep=";", dec="," )
-
+glmdata <- read.table("Cancellation.csv", header=TRUE, sep=";", dec=",", quote="", stringsAsFactors = FALSE)
+hist(glmdata[glmdata$Number.of.Persons<100,]$Number.of.Persons)
 ######################### Section 2: Create groups & aggregate data #########################
 
 # Now you need to modify your data so that you can perform a GLM analysis
@@ -40,9 +40,18 @@ glmdata$NoPGroup <- cut(glmdata$Number.of.Persons,
 
 Industry <- c('B','D', 'E', 'U')
 Service <- c('G','I','S','T')
+# The missing is bad because it has zero claims --> Hard to predict
 glmdata$ActivityGroup <- ifelse(glmdata$Activity %in% Industry, "Industry",
                                 ifelse(glmdata$Activity %in% Service,"Service",
-                                       "Other" ))
+                                       glmdata$Activity))
+NoInf <- c('Missing', 'IR')
+glmdata$Financial.Rating.Group <- ifelse(glmdata$Financial.Rating %in% NoInf, "NoInf",
+                                         glmdata$Financial.Rating)
+
+glmdata$Travelling.Area<- ifelse(glmdata$Travelling.Area == "Abroad (whole world)", "World",
+                                 ifelse(glmdata$Travelling.Area == "Abroad in Nordic Country","Nordic",
+                                        ifelse(glmdata$Travelling.Area == "Abroad in Europe","Europe",
+                                               "Local")))
 
 # Secondly, we want to aggregate the data.
 # That is, instead of having one row per company&year, we want one row for each existing combination of variables
@@ -50,9 +59,14 @@ glmdata$ActivityGroup <- ifelse(glmdata$Activity %in% Industry, "Industry",
 # Tha aggregated data is stored in a new table, glmdata2
 ##### You need to consider if there are any other variables you want to aggregate by, and modify the code accordingly
 
+#Not going to add dangerous area because the "Not Excluded" has zero claims
+
 glmdata2 <- aggregate(glmdata[c("Duration", "NumberOfClaims", "ClaimCost")],by=list(NoP_group = glmdata$NoPGroup,
-                                                                                    Activity_group = as.factor(glmdata$ActivityGroup)
-), FUN=sum, na.rm=TRUE)
+                                                                                    Activity_group = as.factor(glmdata$ActivityGroup),
+                                                                                    FinRat_group = as.factor(glmdata$Financial.Rating.Group),
+                                                                                    Travelling.Area = as.factor(glmdata$Travelling.Area)
+                                                                                    #Dangerous.Area = as.factor(glmdata$Dangerous.areas)
+                                                                                    ), FUN=sum, na.rm=TRUE)
 
 # We then do some preparation for the output the GLM function will give.
 # This piece of code creates a new table, glmdata3, with a row per variable and group, and with data on the total duration corresponding to this group.
@@ -61,14 +75,24 @@ glmdata2 <- aggregate(glmdata[c("Duration", "NumberOfClaims", "ClaimCost")],by=l
 glmdata3 <-
   data.frame(rating.factor =
                c(rep("NoPGroup", nlevels(glmdata2$NoP_group)),
-                 rep("ActivityGroup", nlevels(glmdata2$Activity_group))),
+                 rep("ActivityGroup", nlevels(glmdata2$Activity_group)),
+                 rep("FinRatGroup", nlevels(glmdata2$FinRat_group)),
+                 rep("TravellingArea", nlevels(glmdata2$Travelling.Area))
+                 #rep("DangerousArea", nlevels(glmdata2$Dangerous.Area))
+                 ),
              class =
                c(levels(glmdata2$NoP_group),
-                 levels(glmdata2$Activity_group)),
+                 levels(glmdata2$Activity_group),
+                 levels(glmdata2$FinRat_group),
+                 levels(glmdata2$Travelling.Area)
+                 #levels(glmdata2$Dangerous.Area)
+                 ),
              stringsAsFactors = FALSE)
 
 new.cols <-
-  foreach (rating.factor = c("NoP_group", "Activity_group"),
+  foreach (rating.factor = c("NoP_group", "Activity_group", "FinRat_group", "Travelling.Area"
+                             #"Dangerous.Area"
+                             ),
            .combine = rbind) %do%
   {
     nclaims <- tapply(glmdata2$NumberOfClaims, glmdata2[[rating.factor]], sum)
@@ -90,8 +114,12 @@ rm(new.cols)
 ##### This is where you can modify the model by adding or removing variables
 
 model.frequency <-
-  glm(NumberOfClaims ~ NoP_group + Activity_group + offset(log(Duration)),
+  glm(NumberOfClaims ~ NoP_group + Activity_group + FinRat_group + Travelling.Area + offset(log(Duration)),
       data = glmdata2, family = poisson)
+
+summary(model.frequency)
+#there are some groups with high p-values so maybe we should reajust them
+# all finaltial ratings have great conficende
 
 # Then we save the coefficients resulting from the GLM analysis in an array
 ##### You should not need to modify this part of the code
@@ -110,7 +138,10 @@ rels <- exp(rels[1] + rels[-1])/exp(rels[1])
 
 ##### You need to modify this code to fit your variables
 variableLevels <- c(nlevels(glmdata2[["NoP_group"]]),
-                    nlevels(glmdata2[["Activity_group"]]))
+                    nlevels(glmdata2[["Activity_group"]]),
+                    nlevels(glmdata2[["FinRat_group"]]),
+                    nlevels(glmdata2[["Travelling.Area"]])
+                    )
 
 #You do not need to modify this part
 cs <- cumsum(variableLevels)
@@ -121,12 +152,13 @@ for(i in 1:length(variableLevels)){
 
 # The following code needs to be used at two different places so we put it in a function.
 ##### This part needs to be modified if you change which variables are included in the model, but not if you change the groups inside a variable
+
 attachRels <- function(rels_vec, vector, cs, cs_rels) {
   c(c(1, rels_vec[ 1 : cs_rels[1] ])[rank(-vector[ 1 : cs[1] ], ties.method = "first")],
-    c(1, rels_vec[ (cs_rels[1]+1) : cs_rels[2] ])[rank(-vector[ (cs[1]+1) : cs[2] ], ties.method = "first")])
+    c(1, rels_vec[ (cs_rels[1]+1) : cs_rels[2] ])[rank(-vector[ (cs[1]+1) : cs[2] ], ties.method = "first")],
+    c(1, rels_vec[ (cs_rels[2]+1) : cs_rels[3] ])[rank(-vector[ (cs[2]+1) : cs[3] ], ties.method = "first")],
+    c(1, rels_vec[ (cs_rels[3]+1) : cs_rels[4] ])[rank(-vector[ (cs[3]+1) : cs[4] ], ties.method = "first")])
 }
-
-
 
 
 # Use the function created above, you do not need to modify this part
@@ -138,14 +170,24 @@ glmdata3$rels.frequency <- attachRels(rels, glmdata3$duration, cs, cs_rels)
 
 glmdata2$avgclaim=glmdata2$ClaimCost/glmdata2$NumberOfClaims
 
+# converting nan to 0 from average claims
+is.nan.data.frame <- function(x)
+  do.call(cbind, lapply(x, is.nan))
+glmdata2$avgclaim[is.nan(glmdata2$avgclaim)]<-0
+
+
 # Then we do the same thing as we did when modelling claims frequency, but we look at average claim;
 # A GLM analysis is run, the coefficients stored, and saved in a new column, named rels.severity, glmdata3
 ##### You need to modify this part of the code in the same way as you did for the GLM model for frequency.  Add or remove variables
 ##### Remember that, according to the project instructions, you need to use the same variables for the severity as for the frequency.
 
+
 model.severity <-
-  glm(avgclaim ~ NoP_group + Activity_group ,
+  glm(avgclaim ~ NoP_group + Activity_group + FinRat_group + Travelling.Area ,
       data = glmdata2[glmdata2$avgclaim>0,], family = Gamma("log"), weight=NumberOfClaims)
+
+summary(model.severity)
+# not looking very good --> a lot of variables have high p-value
 
 # You do not need to change this part
 rels <- coef(model.severity)
@@ -184,19 +226,46 @@ p3 <- ggplot(subset(glmdata3, rating.factor=="NoPGroup"), aes(x=class, y=rels.ri
 
 p4 <- ggplot(subset(glmdata3, rating.factor=="ActivityGroup"), aes(x=class, y=rels.frequency)) +
   geom_point(colour="blue") + geom_line(aes(group=1), colour="blue") + ggtitle("Activity: frequency factors") +
-  geom_text(aes(label=paste(round(rels.frequency,2))), nudge_y=0.05)
+  geom_text(aes(label=paste(round(rels.frequency,2))), nudge_y=0.05)+theme(axis.text.x = element_text(angle = 30, hjust = 1))
 
 p5 <- ggplot(subset(glmdata3, rating.factor=="ActivityGroup"), aes(x=class, y=rels.severity)) +
   geom_point(colour="blue") + geom_line(aes(group=1), colour="blue") + ggtitle("Activity: severity factors") +
-  geom_text(aes(label=paste(round(rels.severity,2))), nudge_y=0.1)
+  geom_text(aes(label=paste(round(rels.severity,2))), nudge_y=0.1)+theme(axis.text.x = element_text(angle = 30, hjust = 1))
 
 p6 <- ggplot(subset(glmdata3, rating.factor=="ActivityGroup"), aes(x=class, y=rels.risk)) +
   geom_point(colour="blue") + geom_line(aes(group=1), colour="blue") + ggtitle("Activity: risk factors") +
-  geom_text(aes(label=paste(round(rels.risk,2))), nudge_y=0.1)
+  geom_text(aes(label=paste(round(rels.risk,2))), nudge_y=0.1)+theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+p7 <- ggplot(subset(glmdata3, rating.factor=="FinRatGroup"), aes(x=class, y=rels.frequency)) +
+  geom_point(colour="blue") + geom_line(aes(group=1), colour="blue") + ggtitle("FinRatGroup: frequency factors") +
+  geom_text(aes(label=paste(round(rels.frequency,2))), nudge_y=0.05)+theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+p8 <- ggplot(subset(glmdata3, rating.factor=="FinRatGroup"), aes(x=class, y=rels.severity)) +
+  geom_point(colour="blue") + geom_line(aes(group=1), colour="blue") + ggtitle("FinRatGroup: severity factors") +
+  geom_text(aes(label=paste(round(rels.severity,2))), nudge_y=0.1)+theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+p9 <- ggplot(subset(glmdata3, rating.factor=="FinRatGroup"), aes(x=class, y=rels.risk)) +
+  geom_point(colour="blue") + geom_line(aes(group=1), colour="blue") + ggtitle("FinRatGroup: risk factors") +
+  geom_text(aes(label=paste(round(rels.risk,2))), nudge_y=0.1)+theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+p10 <- ggplot(subset(glmdata3, rating.factor=="TravellingArea"), aes(x=class, y=rels.frequency)) +
+  geom_point(colour="blue") + geom_line(aes(group=1), colour="blue") + ggtitle("Travelling.Area: frequency factors") +
+  geom_text(aes(label=paste(round(rels.frequency,2))), nudge_y=0.05)+theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+p11 <- ggplot(subset(glmdata3, rating.factor=="TravellingArea"), aes(x=class, y=rels.severity)) +
+  geom_point(colour="blue") + geom_line(aes(group=1), colour="blue") + ggtitle("Travelling.Area: severity factors") +
+  geom_text(aes(label=paste(round(rels.severity,2))), nudge_y=0.1)+theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+p12 <- ggplot(subset(glmdata3, rating.factor=="TravellingArea"), aes(x=class, y=rels.risk)) +
+  geom_point(colour="blue") + geom_line(aes(group=1), colour="blue") + ggtitle("Travelling.Area: risk factors") +
+  geom_text(aes(label=paste(round(rels.risk,2))), nudge_y=0.1)+theme(axis.text.x = element_text(angle = 30, hjust = 1))
 
 
 
-multiplot(p1,p2,p3,p4,p5,p6, cols=2)
+
+options(repr.plot.width=18, repr.plot.height=18)
+multiplot(p1,p2,p3,p4,p5,p6, p7, p8, p9, p10, p11, p12, cols=4)
+
 
 
 
