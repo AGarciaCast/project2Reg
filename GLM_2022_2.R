@@ -122,6 +122,9 @@ model.frequency <-
       data = glmdata2, family = poisson)
 
 summary(model.frequency)
+logLik(model.frequency)
+AIC(model.frequency)
+BIC(model.frequency)
 #there are some groups with high p-values so maybe we should reajust them
 # all finaltial ratings have great conficende
 
@@ -191,6 +194,9 @@ model.severity <-
       data = glmdata2[glmdata2$avgclaim>0,], family = Gamma("log"), weight=NumberOfClaims)
 
 summary(model.severity)
+logLik(model.severity)
+AIC(model.severity)
+BIC(model.severity)
 # not looking very good --> a lot of variables have high p-value
 
 # You do not need to change this part

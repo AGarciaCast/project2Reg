@@ -7,7 +7,9 @@ source("multiplot.R")
 library(ggplot2)
 library(foreach)
 library(openxlsx)
-
+library(leaps)
+library(lmtest)
+library(stats)
 ######################### Section 1: Read data #########################
 
 # This is where your GLM data is read form Cancellation.csv into a table in R
@@ -29,12 +31,13 @@ hist(glmdata[glmdata$Number.of.Persons<100,]$Number.of.Persons)
 ###### For example visualize the data for the different variables and refer to the information in the Appendix group the Activity codes on similar types of business.
 ###### Remember to think about risk homogeneous and stable groups, for example having groups with zero # of claims or claims cost and almost no Duration makes it hard to determine its risk.
 ###### You might also want to group other variables from glmdata, in a similar manner
-
+nrow(glmdata[glmdata$Number.of.Persons>=100 ,])
 
 glmdata$NoPGroup <- cut(glmdata$Number.of.Persons,
-                       breaks = c(-Inf, 2, 5, 15, 50, 100, Inf),
-                       labels = c("01_<2", "02_2_5", "03_5-15", "04_15-50","05_50-100", "06_>=100"),
-                       right = FALSE)
+                        breaks = c(-Inf, 2, 5, 15, 50, 100, 500, 1000, Inf),
+                        labels = c("01_<2", "02_2_5", "03_5-15", "04_15-50", "05_50-100", "06_100-500", "07_500-1000", "08_>=1000"),
+                        right = FALSE)
+
 
 
 
@@ -51,13 +54,16 @@ glmdata$ActivityGroup <- ifelse(glmdata$Activity %in% Industry, "Industry",
                                                      ifelse(glmdata$Activity %in% Other,"Other",
                                                             glmdata$Activity)))))
 NoInf <- c('Missing', 'IR')
+High <- c('A', 'AA')
+Mid <- c('AN', 'B')
 glmdata$Financial.Rating.Group <- ifelse(glmdata$Financial.Rating %in% NoInf, "NoInf",
-                                         glmdata$Financial.Rating)
+                                         ifelse(glmdata$Financial.Rating %in% High, "A_AA",
+                                                ifelse(glmdata$Financial.Rating %in% Mid, "B_AN",
+                                                      glmdata$Financial.Rating)))
 
-glmdata$Travelling.Area<- ifelse(glmdata$Travelling.Area == "Abroad (whole world)", "World",
-                                 ifelse(glmdata$Travelling.Area == "Abroad in Nordic Country","Nordic",
-                                        ifelse(glmdata$Travelling.Area == "Abroad in Europe","Europe",
-                                               "Local")))
+OutNord <- c("Abroad (whole world)", "Abroad in Europe")
+glmdata$Travelling.Area.Group <- ifelse(glmdata$Travelling.Area %in% OutNord, "Out", 
+                                        "In")
 
 # Secondly, we want to aggregate the data.
 # That is, instead of having one row per company&year, we want one row for each existing combination of variables
@@ -70,7 +76,7 @@ glmdata$Travelling.Area<- ifelse(glmdata$Travelling.Area == "Abroad (whole world
 glmdata2 <- aggregate(glmdata[c("Duration", "NumberOfClaims", "ClaimCost")],by=list(NoP_group = glmdata$NoPGroup,
                                                                                     Activity_group = as.factor(glmdata$ActivityGroup),
                                                                                     FinRat_group = as.factor(glmdata$Financial.Rating.Group),
-                                                                                    Travelling.Area = as.factor(glmdata$Travelling.Area)
+                                                                                    Travelling.Area = as.factor(glmdata$Travelling.Area.Group)
                                                                                     #Dangerous.Area = as.factor(glmdata$Dangerous.areas)
                                                                                     ), FUN=sum, na.rm=TRUE)
 
@@ -127,8 +133,36 @@ summary(model.frequency)
 logLik(model.frequency)
 AIC(model.frequency)
 BIC(model.frequency)
-#there are some groups with high p-values so maybe we should reajust them
-# all finaltial ratings have great conficende
+
+step.model.frequency.aic = step(model.frequency, direction = "forward", test = "Chisq", trace = T)
+step.model.frequency.aic$anova
+
+model.frequency_red1 <-
+  glm(NumberOfClaims ~  Activity_group + FinRat_group + Travelling.Area + offset(log(Duration)),
+      data = glmdata2, family = poisson)
+
+lrtest(model.frequency, model.frequency_red1) #Better full model
+
+model.frequency_red2 <-
+  glm(NumberOfClaims ~ NoP_group + FinRat_group + Travelling.Area + offset(log(Duration)),
+      data = glmdata2, family = poisson)
+
+lrtest(model.frequency, model.frequency_red2) #Better full model
+
+
+model.frequency_red3 <-
+  glm(NumberOfClaims ~ NoP_group + Activity_group  + Travelling.Area + offset(log(Duration)),
+      data = glmdata2, family = poisson)
+
+lrtest(model.frequency, model.frequency_red3) #Better full model
+
+
+model.frequency_red4 <-
+  glm(NumberOfClaims ~ NoP_group + Activity_group  + FinRat_group + offset(log(Duration)),
+      data = glmdata2, family = poisson)
+
+lrtest(model.frequency, model.frequency_red4) #Better full model
+
 
 # Then we save the coefficients resulting from the GLM analysis in an array
 ##### You should not need to modify this part of the code
@@ -199,7 +233,38 @@ summary(model.severity)
 logLik(model.severity)
 AIC(model.severity)
 BIC(model.severity)
-# not looking very good --> a lot of variables have high p-value
+
+
+step.model.severity.aic = step(model.severity, direction = "forward", test = "Chisq", trace = T)
+step.model.severity.aic$anova
+
+model.severity_red1 <-
+  glm(avgclaim ~ Activity_group + FinRat_group + Travelling.Area ,
+      data = glmdata2[glmdata2$avgclaim>0,], family = Gamma("log"), weight=NumberOfClaims)
+
+lrtest(model.severity, model.severity_red1) #Better full model
+
+model.severity_red2 <-
+  glm(avgclaim ~ NoP_group  + FinRat_group + Travelling.Area ,
+      data = glmdata2[glmdata2$avgclaim>0,], family = Gamma("log"), weight=NumberOfClaims)
+
+lrtest(model.severity, model.severity_red2) #Better full model
+
+
+model.severity_red3 <-
+  glm(avgclaim ~ NoP_group + Activity_group  + Travelling.Area ,
+      data = glmdata2[glmdata2$avgclaim>0,], family = Gamma("log"), weight=NumberOfClaims)
+
+lrtest(model.severity, model.severity_red3) #Better full model
+
+
+model.severity_red4 <-
+  glm(avgclaim ~ NoP_group + Activity_group + FinRat_group ,
+      data = glmdata2[glmdata2$avgclaim>0,], family = Gamma("log"), weight=NumberOfClaims)
+
+
+lrtest(model.severity, model.severity_red4) #Better full model
+
 
 # You do not need to change this part
 rels <- coef(model.severity)

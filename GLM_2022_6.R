@@ -8,7 +8,8 @@ library(ggplot2)
 library(foreach)
 library(openxlsx)
 library(leaps)
-
+library(lmtest)
+library(stats)
 ######################### Section 1: Read data #########################
 
 # This is where your GLM data is read form Cancellation.csv into a table in R
@@ -34,9 +35,8 @@ nrow(glmdata[glmdata$Number.of.Persons>=100 ,])
 
 glmdata$NoPGroup <- cut(glmdata$Number.of.Persons,
                         breaks = c(-Inf, 2, 5, 15, 50, 100, Inf),
-                        labels = c("01_<2", "02_2_5", "03_5-15", "04_15-50", "05_50-100", "06_>=100"),
+                        labels = c("01_<2", "02_2_5", "03_5-15", "04_15-50","05_50-100", "06_>=100"),
                         right = FALSE)
-
 
 
 
@@ -129,11 +129,39 @@ model.frequency <-
       data = glmdata2, family = poisson)
 
 summary(model.frequency)
+logLik(model.frequency)
+AIC(model.frequency)
+BIC(model.frequency)
+
+step.model.frequency.aic = step(model.frequency, direction = "forward", test = "Chisq", trace = T)
+step.model.frequency.aic$anova
+
+model.frequency_red1 <-
+  glm(NumberOfClaims ~  Activity_group + FinRat_group + Travelling.Area + offset(log(Duration)),
+      data = glmdata2, family = poisson)
+
+lrtest(model.frequency, model.frequency_red1) #Better full model
+
+model.frequency_red2 <-
+  glm(NumberOfClaims ~ NoP_group + FinRat_group + Travelling.Area + offset(log(Duration)),
+      data = glmdata2, family = poisson)
+
+lrtest(model.frequency, model.frequency_red2) #Better full model
 
 
-step.model.bic = step(model.frequency,
-                      direction = "both", test = "Chisq", trace = T)
-step.model.bic$anova
+model.frequency_red3 <-
+  glm(NumberOfClaims ~ NoP_group + Activity_group  + Travelling.Area + offset(log(Duration)),
+      data = glmdata2, family = poisson)
+
+lrtest(model.frequency, model.frequency_red3) #Better full model
+
+
+model.frequency_red4 <-
+  glm(NumberOfClaims ~ NoP_group + Activity_group  + FinRat_group + offset(log(Duration)),
+      data = glmdata2, family = poisson)
+
+lrtest(model.frequency, model.frequency_red4) #Better full model
+
 
 # Then we save the coefficients resulting from the GLM analysis in an array
 ##### You should not need to modify this part of the code
@@ -201,7 +229,41 @@ model.severity <-
       data = glmdata2[glmdata2$avgclaim>0,], family = Gamma("log"), weight=NumberOfClaims)
 
 summary(model.severity)
-# not looking very good --> a lot of variables have high p-value
+logLik(model.severity)
+AIC(model.severity)
+BIC(model.severity)
+
+
+step.model.severity.aic = step(model.severity, direction = "forward", test = "Chisq", trace = T)
+step.model.severity.aic$anova
+
+model.severity_red1 <-
+  glm(avgclaim ~ Activity_group + FinRat_group + Travelling.Area ,
+      data = glmdata2[glmdata2$avgclaim>0,], family = Gamma("log"), weight=NumberOfClaims)
+
+lrtest(model.severity, model.severity_red1) #Better full model
+
+model.severity_red2 <-
+  glm(avgclaim ~ NoP_group  + FinRat_group + Travelling.Area ,
+      data = glmdata2[glmdata2$avgclaim>0,], family = Gamma("log"), weight=NumberOfClaims)
+
+lrtest(model.severity, model.severity_red2) #Better full model
+
+
+model.severity_red3 <-
+  glm(avgclaim ~ NoP_group + Activity_group  + Travelling.Area ,
+      data = glmdata2[glmdata2$avgclaim>0,], family = Gamma("log"), weight=NumberOfClaims)
+
+lrtest(model.severity, model.severity_red3) #Better full model
+
+
+model.severity_red4 <-
+  glm(avgclaim ~ NoP_group + Activity_group + FinRat_group ,
+      data = glmdata2[glmdata2$avgclaim>0,], family = Gamma("log"), weight=NumberOfClaims)
+
+
+lrtest(model.severity, model.severity_red4) #Better full model
+
 
 # You do not need to change this part
 rels <- coef(model.severity)
